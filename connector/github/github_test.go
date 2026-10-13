@@ -644,6 +644,50 @@ func TestGetSendsAPIVersionHeader(t *testing.T) {
 	expectEquals(t, gotHeader, githubAPIVersion)
 }
 
+func TestCallbackMatches(t *testing.T) {
+	const callback = "https://dex.example.com/callback"
+	tests := []struct {
+		name        string
+		redirectURI string
+		callbackURL string
+		expected    bool
+	}{
+		{name: "exact", redirectURI: callback, callbackURL: callback, expected: true},
+		{name: "instance host", redirectURI: "https://dex.west.example.com/callback", callbackURL: callback, expected: true},
+		{name: "host of the domain", redirectURI: "https://west.example.com/callback", callbackURL: callback, expected: true},
+		{name: "host case", redirectURI: "https://DEX.West.Example.com/callback", callbackURL: callback, expected: true},
+		{name: "issuer path", redirectURI: "https://dex.west.example.com/dex/callback", callbackURL: "https://dex.example.com/dex/callback", expected: true},
+		{name: "the domain itself", redirectURI: "https://example.com/callback", callbackURL: callback, expected: false},
+		{name: "another domain", redirectURI: "https://dex.example.org/callback", callbackURL: callback, expected: false},
+		{name: "suffix without a dot", redirectURI: "https://dex.notexample.com/callback", callbackURL: callback, expected: false},
+		{name: "another path", redirectURI: "https://dex.west.example.com/other", callbackURL: callback, expected: false},
+		{name: "another scheme", redirectURI: "http://dex.west.example.com/callback", callbackURL: callback, expected: false},
+		{name: "another port", redirectURI: "https://dex.west.example.com:8443/callback", callbackURL: callback, expected: false},
+		{name: "query", redirectURI: "https://dex.west.example.com/callback?x=1", callbackURL: callback, expected: false},
+		{name: "user info", redirectURI: "https://user@dex.west.example.com/callback", callbackURL: callback, expected: false},
+		{name: "issuer without a parent domain", redirectURI: "https://dex.example.com/callback", callbackURL: "https://example.com/callback", expected: false},
+		{name: "invalid redirect URI", redirectURI: "https://dex west.example.com/callback", callbackURL: callback, expected: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			expectEquals(t, callbackMatches(test.redirectURI, test.callbackURL), test.expected)
+		})
+	}
+}
+
+func TestLoginURLOnInstanceHost(t *testing.T) {
+	c := githubConnector{clientID: "client", redirectURI: "https://dex.west.example.com/callback"}
+
+	loginURL, _, err := c.LoginURL(connector.Scopes{}, "https://dex.example.com/callback", "state")
+	expectNil(t, err)
+	u, err := url.Parse(loginURL)
+	expectNil(t, err)
+	expectEquals(t, u.Query().Get("redirect_uri"), "https://dex.west.example.com/callback")
+
+	_, _, err = c.LoginURL(connector.Scopes{}, "https://dex.example.org/callback", "state")
+	expectNotNil(t, err, "a callback URL outside the issuer's domain")
+}
+
 func newTestServer(responses map[string]testResponse) *httptest.Server {
 	var s *httptest.Server
 	s = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

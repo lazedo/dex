@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -202,11 +203,44 @@ func (c *githubConnector) oauth2Config(scopes connector.Scopes) *oauth2.Config {
 }
 
 func (c *githubConnector) LoginURL(scopes connector.Scopes, callbackURL, state string) (string, []byte, error) {
-	if c.redirectURI != callbackURL {
+	if !callbackMatches(c.redirectURI, callbackURL) {
 		return "", nil, fmt.Errorf("expected callback URL %q did not match the URL in the config %q", callbackURL, c.redirectURI)
 	}
 
 	return c.oauth2Config(scopes).AuthCodeURL(state), nil, nil
+}
+
+// callbackMatches tells whether the configured redirect URI may stand for the
+// callback URL dex expects, the issuer's /callback. Besides the exact URL, it
+// accepts the same scheme, port and path on any host of the issuer's domain:
+// the issuer host without its first label. Several dex instances behind one
+// issuer can then each get the callback on a host of their own, so that the
+// login returns to the instance that holds the auth request. With the issuer
+// https://dex.example.com, https://dex.west.example.com/callback matches; a
+// host outside example.com, another path or another scheme does not.
+func callbackMatches(redirectURI, callbackURL string) bool {
+	if redirectURI == callbackURL {
+		return true
+	}
+	redirect, err := url.Parse(redirectURI)
+	if err != nil {
+		return false
+	}
+	callback, err := url.Parse(callbackURL)
+	if err != nil {
+		return false
+	}
+	if redirect.Scheme != callback.Scheme || redirect.Port() != callback.Port() || redirect.Path != callback.Path ||
+		redirect.User != nil || redirect.RawQuery != "" || redirect.Fragment != "" {
+		return false
+	}
+	// An issuer host without a parent domain of at least two labels (such as
+	// example.com) only matches exactly: its parent would be a public suffix.
+	_, domain, ok := strings.Cut(strings.ToLower(callback.Hostname()), ".")
+	if !ok || !strings.Contains(domain, ".") {
+		return false
+	}
+	return strings.HasSuffix(strings.ToLower(redirect.Hostname()), "."+domain)
 }
 
 type oauth2Error struct {
