@@ -1,0 +1,106 @@
+# Builds the dex image of the lazedo fork and publishes it to GHCR, the same
+# way as the other forks: one architecture per native runner, joined by digest
+# into a single manifest tagged with the short commit SHA.
+name: lazedo-image
+
+on:
+  push:
+    branches:
+      - "lazedo/**"
+  workflow_dispatch:
+
+concurrency:
+  group: lazedo-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: dex
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Version
+        id: version
+        run: echo "version=v2.46.0-lazedo-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=dex-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=dex-${{ matrix.arch }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest_${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest_*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Create multi-arch manifest
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${{ github.repository_owner }}/${IMAGE_NAME}"
+          # shellcheck disable=SC2046
+          docker buildx imagetools create -t "${IMAGE}:${{ steps.sha.outputs.short }}" \
+            $(for f in /tmp/digests/*; do echo "${IMAGE}@$(cat "$f")"; done)
+          docker buildx imagetools inspect "${IMAGE}:${{ steps.sha.outputs.short }}"
+          echo "\`${IMAGE}:${{ steps.sha.outputs.short }}\` (amd64+arm64)" >> "$GITHUB_STEP_SUMMARY"
