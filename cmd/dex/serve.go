@@ -335,6 +335,16 @@ func runServe(options serveOptions) error {
 			return fmt.Errorf("failed to open vault signer: %v", err)
 		}
 		logger.Info("signer configured", "type", "vault")
+	case "static":
+		staticConfig, ok := c.Signer.Config.(*signer.StaticConfig)
+		if !ok {
+			return fmt.Errorf("invalid static signer config")
+		}
+		signerInstance, err = staticConfig.Open(logger)
+		if err != nil {
+			return fmt.Errorf("failed to open static signer: %v", err)
+		}
+		logger.Info("signer configured", "type", "static", "keys_file", staticConfig.KeysFile)
 	case "local":
 		localConfig, ok := c.Signer.Config.(*signer.LocalConfig)
 		if !ok {

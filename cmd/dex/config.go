@@ -513,11 +513,13 @@ type SignerConfig interface{}
 var (
 	_ SignerConfig = (*signer.LocalConfig)(nil)
 	_ SignerConfig = (*signer.VaultConfig)(nil)
+	_ SignerConfig = (*signer.StaticConfig)(nil)
 )
 
 var signerConfigs = map[string]func() SignerConfig{
-	"local": func() SignerConfig { return new(signer.LocalConfig) },
-	"vault": func() SignerConfig { return new(signer.VaultConfig) },
+	"local":  func() SignerConfig { return new(signer.LocalConfig) },
+	"vault":  func() SignerConfig { return new(signer.VaultConfig) },
+	"static": func() SignerConfig { return new(signer.StaticConfig) },
 }
 
 // UnmarshalJSON allows Signer to implement the unmarshaler interface to
